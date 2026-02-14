@@ -244,10 +244,10 @@ int main() {
     WNDCLASS wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "BarisEngine";
+    wc.lpszClassName = "CBA";
     RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowEx(0, "BarisEngine", "Baris GPU Particles - RTX Optimized", 
+    HWND hwnd = CreateWindowEx(0, "CBA", "CBA GPU Particles - RTX Optimized", 
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720, 0, 0, wc.hInstance, 0);
 
     // 2. OPENGL BASLATMA (Dummy Context Trick)
