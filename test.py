@@ -7,203 +7,198 @@ from flask import Flask, render_template_string, request, jsonify, session, abor
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
-# Klasör Ayarları
 DB_DIR = "database"
 QUIZ_DIR = os.path.join(DB_DIR, "quizzes")
-USERS_FILE = os.path.join(DB_DIR, "users.json")
+if not os.path.exists(QUIZ_DIR): os.makedirs(QUIZ_DIR)
 
-# Gerekli klasör ve dosyaları oluştur
-for path in [DB_DIR, QUIZ_DIR]:
-    if not os.path.exists(path): os.makedirs(path)
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "w") as f: json.dump({}, f)
-
-def get_users():
-    with open(USERS_FILE, "r") as f: return json.load(f)
-
-def save_users(data):
-    with open(USERS_FILE, "w") as f: json.dump(data, f, indent=4)
-
-# --- ARAYÜZ (Modern & Dinamik) ---
+# --- ARAYÜZ (Gelişmiş Oyun Ekranı) ---
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Kahoot Pro CMS</title>
+    <title>Kahoot Pro - Play</title>
     <style>
-        :root { --p: #46178f; --s: #eb670f; --r: #e21b3c; --bg: #0f0f0f; }
-        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: #fff; margin: 0; }
-        .container { max-width: 900px; margin: 20px auto; padding: 20px; }
-        .card { background: #1e1e1e; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
-        input { background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 10px; border-radius: 6px; width: calc(100% - 22px); margin: 5px 0; }
-        button { padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
-        .btn-p { background: var(--p); color: white; }
-        .btn-r { background: var(--r); color: white; }
-        .btn-s { background: var(--s); color: white; }
-        .quiz-item { background: #2a2a2a; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 5px solid var(--p); }
-        .q-content { font-size: 13px; color: #aaa; margin: 5px 0; }
+        :root { --p: #46178f; --s: #eb670f; --r: #e21b3c; --b: #1368ce; --g: #26890c; --y: #ffa602; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f2f2f2; margin: 0; text-align: center; }
+        .card { background: white; padding: 30px; border-radius: 15px; width: 400px; margin: 50px auto; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+        .ans-btn { padding: 30px; color: white; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; transition: 0.2s; }
+        .ans-btn:hover { transform: scale(1.02); opacity: 0.9; }
+        .btn-0 { background: var(--r); } .btn-1 { background: var(--b); }
+        .btn-2 { background: var(--y); } .btn-3 { background: var(--g); }
         .hidden { display: none; }
+        input { width: 80%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; }
+        .header { background: var(--p); color: white; padding: 20px; margin-bottom: 20px; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div id="auth-ui" class="card" style="width:300px; margin: 100px auto;">
-        <h2>Giriş</h2>
-        <input type="text" id="user" placeholder="Kullanıcı">
-        <input type="password" id="pass" placeholder="Şifre">
-        <button onclick="auth('login')" class="btn-p" style="width:100%">Giriş Yap</button>
+<div id="lobby">
+    <div class="header"><h1>Kahoot Pro</h1></div>
+    <div class="card">
+        <h3>PIN Koduyla Katıl</h3>
+        <input type="text" id="join-pin" placeholder="Quiz ID (Örn: a1b2c3)">
+        <button onclick="joinGame()" style="padding:12px 25px; background:var(--g); color:white; border:none; border-radius:8px; cursor:pointer;">Giriş Yap</button>
+        <hr>
+        <button onclick="toggleAdmin()" style="background:none; border:none; color: #888; cursor:pointer; font-size:12px;">Yönetici Paneli</button>
     </div>
+</div>
 
-    <div id="main-ui" class="hidden">
-        <div style="display:flex; justify-content:space-between;">
-            <h1>Kahoot Pro Panel</h1>
-            <button onclick="location.reload()" class="btn-r">Çıkış</button>
+<div id="game-screen" class="hidden">
+    <div class="header"><h2 id="q-title-display">Soru</h2></div>
+    <div class="container" style="max-width:800px; margin:auto; padding:20px;">
+        <h1 id="question-text">Soru metni buraya gelecek...</h1>
+        <div class="grid" id="options-grid">
+            <button class="ans-btn btn-0" onclick="checkAnswer(0)" id="opt0"></button>
+            <button class="ans-btn btn-1" onclick="checkAnswer(1)" id="opt1"></button>
+            <button class="ans-btn btn-2" onclick="checkAnswer(2)" id="opt2"></button>
+            <button class="ans-btn btn-3" onclick="checkAnswer(3)" id="opt3"></button>
         </div>
+        <h2 id="feedback" style="margin-top:20px;"></h2>
+    </div>
+</div>
 
-        <div class="card">
-            <h3>Arama (Başlık veya İçerik)</h3>
-            <input type="text" id="search-input" onkeyup="searchQuizzes()" placeholder="İçeriklerde ara...">
-            <div id="quiz-list"></div>
-        </div>
-
-        <div id="admin-tools" class="card hidden">
-            <h3 style="color:var(--s)">Admin: Quiz & İçerik Yönetimi</h3>
-            <input type="text" id="q-title" placeholder="Yeni Quiz Başlığı">
-            <button onclick="createQuiz()" class="btn-s">Boş Quiz (JSON) Oluştur</button>
-            <hr style="border:0.1px solid #333; margin:20px 0;">
-            <h4>Hızlı Soru Ekle</h4>
-            <input type="text" id="target-id" placeholder="Hangi Quiz ID?">
-            <input type="text" id="question-text" placeholder="Soru Metni">
-            <button onclick="addContent()" class="btn-p">İçeriği JSON'a Yaz</button>
-        </div>
+<div id="admin-ui" class="hidden">
+    <div class="card" style="width:600px;">
+        <h2>Yeni Quiz & Soru Ekle</h2>
+        <input type="text" id="new-q-title" placeholder="Quiz Başlığı">
+        <button onclick="createQuiz()">Quiz JSON Oluştur</button>
+        <hr>
+        <input type="text" id="target-id" placeholder="Quiz ID">
+        <input type="text" id="s-soru" placeholder="Soru">
+        <input type="text" id="s-0" placeholder="A Şıkkı">
+        <input type="text" id="s-1" placeholder="B Şıkkı">
+        <input type="text" id="s-2" placeholder="C Şıkkı">
+        <input type="text" id="s-3" placeholder="D Şıkkı">
+        <select id="s-dogru" style="width:85%; padding:10px; margin:10px 0;">
+            <option value="0">Doğru: A</option><option value="1">Doğru: B</option>
+            <option value="2">Doğru: C</option><option value="3">Doğru: D</option>
+        </select>
+        <button onclick="addQuestion()" style="background:var(--p); color:white;">Soruyu Kaydet</button>
+        <button onclick="toggleAdmin()" style="background:#555; color:white;">Geri Dön</button>
     </div>
 </div>
 
 <script>
-    async function auth(type) {
-        const u = document.getElementById('user').value;
-        const p = document.getElementById('pass').value; // Basitlik için düz, sunucuda hashleniyor
-        const res = await fetch('/api/auth', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({u, p})
-        });
-        const data = await res.json();
-        if(data.success) {
-            document.getElementById('auth-ui').classList.add('hidden');
-            document.getElementById('main-ui').classList.remove('hidden');
-            if(data.role === 'admin') document.getElementById('admin-tools').classList.remove('hidden');
-            searchQuizzes();
-        }
+    let currentQuiz = null;
+    let qIndex = 0;
+
+    function toggleAdmin() {
+        document.getElementById('lobby').classList.toggle('hidden');
+        document.getElementById('admin-ui').classList.toggle('hidden');
     }
 
     async function createQuiz() {
-        const title = document.getElementById('q-title').value;
-        await fetch('/api/admin/create', {
+        const title = document.getElementById('new-q-title').value;
+        const res = await fetch('/api/admin/create', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({title})
         });
-        searchQuizzes();
-    }
-
-    async function addContent() {
-        const qid = document.getElementById('target-id').value;
-        const text = document.getElementById('question-text').value;
-        await fetch('/api/admin/add_content', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({id: qid, content: text})
-        });
-        searchQuizzes();
-    }
-
-    async function deleteQuiz(id) {
-        if(!confirm('Bu JSON dosyası kalıcı olarak silinecek. Emin misin?')) return;
-        await fetch('/api/admin/delete', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({id})
-        });
-        searchQuizzes();
-    }
-
-    async function searchQuizzes() {
-        const q = document.getElementById('search-input').value;
-        const res = await fetch(`/api/search?q=${q}`);
         const data = await res.json();
-        const list = document.getElementById('quiz-list');
-        list.innerHTML = "";
-        data.forEach(item => {
-            list.innerHTML += `
-                <div class="quiz-item">
-                    <div>
-                        <strong>${item.title}</strong> (ID: ${item.id})<br>
-                        <div class="q-content">İçerik: ${item.questions.join(', ') || 'Boş'}</div>
-                    </div>
-                    <button onclick="deleteQuiz('${item.id}')" class="btn-r" style="margin-top:10px;">Dosyayı Sil</button>
-                </div>`;
+        alert("Quiz Oluşturuldu! ID: " + data.id);
+    }
+
+    async function addQuestion() {
+        const payload = {
+            id: document.getElementById('target-id').value,
+            q: document.getElementById('s-soru').value,
+            options: [
+                document.getElementById('s-0').value,
+                document.getElementById('s-1').value,
+                document.getElementById('s-2').value,
+                document.getElementById('s-3').value
+            ],
+            correct: parseInt(document.getElementById('s-dogru').value)
+        };
+        await fetch('/api/admin/add_question', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
         });
+        alert("Soru eklendi!");
+    }
+
+    async function joinGame() {
+        const pin = document.getElementById('join-pin').value;
+        const res = await fetch(`/api/quiz/${pin}`);
+        if (res.status === 404) return alert("Hatalı PIN!");
+        
+        currentQuiz = await res.json();
+        qIndex = 0;
+        showQuestion();
+        document.getElementById('lobby').classList.add('hidden');
+        document.getElementById('game-screen').classList.remove('hidden');
+    }
+
+    function showQuestion() {
+        if (qIndex >= currentQuiz.questions.length) {
+            document.getElementById('game-screen').innerHTML = "<h1>Oyun Bitti! Tebrikler.</h1><button onclick='location.reload()'>Başa Dön</button>";
+            return;
+        }
+        const q = currentQuiz.questions[qIndex];
+        document.getElementById('q-title-display').innerText = currentQuiz.title + " (" + (qIndex+1) + "/" + currentQuiz.questions.length + ")";
+        document.getElementById('question-text').innerText = q.question;
+        document.getElementById('opt0').innerText = q.options[0];
+        document.getElementById('opt1').innerText = q.options[1];
+        document.getElementById('opt2').innerText = q.options[2];
+        document.getElementById('opt3').innerText = q.options[3];
+        document.getElementById('feedback').innerText = "";
+    }
+
+    function checkAnswer(choice) {
+        const correct = currentQuiz.questions[qIndex].correct;
+        const feedback = document.getElementById('feedback');
+        if (choice === correct) {
+            feedback.innerText = "DOĞRU! 🎉";
+            feedback.style.color = "green";
+        } else {
+            feedback.innerText = "YANLIŞ! ❌";
+            feedback.style.color = "red";
+        }
+        setTimeout(() => {
+            qIndex++;
+            showQuestion();
+        }, 1500);
     }
 </script>
 </body>
 </html>
 '''
 
-# --- API ---
+# --- BACKEND (JSON Veri Yönetimi) ---
 
-@app.route('/api/auth', methods=['POST'])
-def auth():
-    d = request.json
-    users = get_users()
-    # Demo için admin kontrolü: Eğer users.json boşsa gelen ilk kişiyi admin yap (Dosya güvenliği için manuel de yapılabilir)
-    role = "admin" if d['u'] == "admin" else "user" 
-    session['u'], session['role'] = d['u'], role
-    return jsonify({"success": True, "role": role})
+@app.route('/')
+def home(): return render_template_string(HTML_TEMPLATE)
 
 @app.route('/api/admin/create', methods=['POST'])
 def create():
-    if session.get('role') != 'admin': abort(403)
     q_id = str(uuid.uuid4())[:6]
     data = {"id": q_id, "title": request.json['title'], "questions": []}
     with open(os.path.join(QUIZ_DIR, f"{q_id}.json"), "w") as f:
         json.dump(data, f, indent=4)
-    return jsonify({"success": True})
+    return jsonify({"success": True, "id": q_id})
 
-@app.route('/api/admin/add_content', methods=['POST'])
-def add_content():
-    if session.get('role') != 'admin': abort(403)
+@app.route('/api/admin/add_question', methods=['POST'])
+def add_q():
     q_id = request.json['id']
     path = os.path.join(QUIZ_DIR, f"{q_id}.json")
     if os.path.exists(path):
         with open(path, "r+") as f:
             data = json.load(f)
-            data['questions'].append(request.json['content'])
+            data['questions'].append({
+                "question": request.json['q'],
+                "options": request.json['options'],
+                "correct": request.json['correct']
+            })
             f.seek(0); json.dump(data, f, indent=4); f.truncate()
     return jsonify({"success": True})
 
-@app.route('/api/admin/delete', methods=['POST'])
-def delete():
-    if session.get('role') != 'admin': abort(403)
-    q_id = request.json['id']
-    path = os.path.join(QUIZ_DIR, f"{q_id}.json")
-    if os.path.exists(path):
-        os.remove(path) # JSON dosyasını fiziksel olarak siler
-    return jsonify({"success": True})
-
-@app.route('/api/search')
-def search():
-    query = request.args.get('q', '').lower()
-    results = []
-    for fn in os.listdir(QUIZ_DIR):
-        with open(os.path.join(QUIZ_DIR, fn), "r") as f:
-            d = json.load(f)
-            # Hem başlıkta hem de soru içeriklerinde ara
-            if query in d['title'].lower() or any(query in q.lower() for q in d['questions']):
-                results.append(d)
-    return jsonify(results)
-
-@app.route('/')
-def home(): return render_template_string(HTML_TEMPLATE)
+@app.route('/api/quiz/<pin>')
+def get_quiz(pin):
+    path = os.path.join(QUIZ_DIR, f"{pin}.json")
+    if not os.path.exists(path): abort(404)
+    with open(path, "r") as f:
+        return jsonify(json.load(f))
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
