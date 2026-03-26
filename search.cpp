@@ -2,11 +2,13 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "psapi.lib")
 
 #include <windows.h>
 #include <commctrl.h>
 #include <shlwapi.h>
 #include <gdiplus.h>
+#include <psapi.h>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -15,14 +17,18 @@
 #include <algorithm>
 #include <stdio.h>
 #include <sstream>
+#include <map>
+#include <regex> 
 
 using namespace Gdiplus;
 
+// UI IDs
 #define ID_EDIT 101
 #define ID_BUTTON 102
 #define ID_LISTVIEW 103
 #define ID_STATUSBAR 104
 
+// Context Menu IDs
 #define ID_MENU_OPEN 1001
 #define ID_MENU_EXPLORE 1002
 #define ID_MENU_CMD 1003
@@ -30,6 +36,9 @@ using namespace Gdiplus;
 #define ID_MENU_COPY_PATH 1005
 #define ID_MENU_DELETE 1006
 #define ID_MENU_EXPORT 1007
+#define ID_MENU_EXPORT_JSON 1008  
+#define ID_MENU_SHREDDER 1009     
+#define ID_MENU_RUN_ADMIN 1010    
 
 #define WM_SEARCH_FINISHED (WM_USER + 1)
 #define WM_TRAYICON (WM_USER + 2)
@@ -49,32 +58,82 @@ struct SearchResult {
     FILETIME rawDate;
 };
 
-// Global Değişkenler
+// Global Variables
 HWND hEdit, hButton, hListView, hStatus, hMainWindow;
 std::vector<SearchResult> searchResults;
 std::mutex resultsMutex;
 ULONGLONG searchStartTime = 0;
 std::atomic<int> currentSearchGen(0);
-
 int currentSortCol = -1;
 bool sortAscending = true;
 bool isAlwaysOnTop = false;
 
+// SECRET MODE FLAGS
+bool isMKTMode = false;
+bool isCBAMode = false;
+bool isWaitingForCheat = false;
+
+// Drive Capacities Map for Dynamic Ratio
+std::map<wchar_t, ULONGLONG> driveCapacities; 
 int spinnerFrame = 0; 
 const wchar_t spinnerChars[] = { L'|', L'/', L'-', L'\\' };
 
+// UI Styling
 HFONT hUIFont;
 HBRUSH hDarkBrush;
 COLORREF bgColor = RGB(25, 25, 25);
 COLORREF textColor = RGB(0, 255, 255);
+COLORREF gradientStart = RGB(0, 150, 255);
+COLORREF gradientEnd = RGB(0, 255, 200);
 NOTIFYICONDATAW nid;
 
+void ActivateMKTMode() {
+    isMKTMode = true;
+    bgColor = RGB(0, 0, 0);       
+    textColor = RGB(0, 255, 0);   
+    gradientStart = RGB(0, 50, 0);
+    gradientEnd = RGB(0, 200, 0);
+    hDarkBrush = CreateSolidBrush(bgColor);
+    
+    // Set transparency to 90%
+    SetWindowLongW(hMainWindow, GWL_EXSTYLE, GetWindowLongW(hMainWindow, GWL_EXSTYLE) | WS_EX_LAYERED);
+    SetLayeredWindowAttributes(hMainWindow, 0, 230, LWA_ALPHA); 
+    
+    // Force Topmost
+    SetWindowPos(hMainWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    SetWindowTextW(hMainWindow, L"MUSTAFA KEMAL TASTEKIN ARCHITECTURE ACTIVE - HACKER MODE");
+    InvalidateRect(hMainWindow, NULL, TRUE);
+    MessageBeep(MB_ICONWARNING);
+}
+
+void ActivateCBAMode() {
+    isMKTMode = true; // CBA inherits MKT features
+    isCBAMode = true;
+    bgColor = RGB(40, 0, 0);        
+    textColor = RGB(255, 215, 0);   
+    gradientStart = RGB(150, 0, 0);
+    gradientEnd = RGB(255, 50, 50);
+    hDarkBrush = CreateSolidBrush(bgColor);
+    
+    // Set transparency to 80%
+    SetWindowLongW(hMainWindow, GWL_EXSTYLE, GetWindowLongW(hMainWindow, GWL_EXSTYLE) | WS_EX_LAYERED);
+    SetLayeredWindowAttributes(hMainWindow, 0, 200, LWA_ALPHA); 
+    
+    // Force Topmost
+    SetWindowPos(hMainWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    SetWindowTextW(hMainWindow, L"CBA - OMEGA LEVEL DEVELOPER MODE");
+    InvalidateRect(hMainWindow, NULL, TRUE);
+    MessageBeep(MB_ICONASTERISK);
+}
+
+// Multi-pattern Wildcard Parser
 std::vector<std::wstring> SplitPatterns(const std::wstring& str, wchar_t delimiter) {
     std::vector<std::wstring> tokens;
     std::wstringstream wss(str);
     std::wstring token;
     while (std::getline(wss, token, delimiter)) {
         if (!token.empty()) {
+            // Auto-append '*' if no wildcard is provided by the user
             if (token.find(L'*') == std::wstring::npos && token.find(L'?') == std::wstring::npos) {
                 tokens.push_back(L"*" + token + L"*");
             } else {
@@ -88,26 +147,59 @@ std::vector<std::wstring> SplitPatterns(const std::wstring& str, wchar_t delimit
 WNDPROC OldEditProc;
 LRESULT CALLBACK EditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == WM_KEYDOWN) {
+        // SECRET CODE TRIGGER: Ctrl + U
+        if (wParam == 'U' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            isWaitingForCheat = true;
+            SetWindowTextW(GetParent(hwnd), L"--- ENTER SECRET CHEAT CODE ---");
+            SetWindowTextW(hwnd, L"");
+            SendMessageW(hwnd, EM_SETPASSWORDCHAR, (WPARAM)L'*', 0); // Hide input
+            return 0;
+        }
+
         if (wParam == VK_RETURN) {
+            if (isWaitingForCheat) {
+                wchar_t buffer[256]; GetWindowTextW(hwnd, buffer, 256);
+                std::wstring code(buffer);
+                
+                if (code == L"mkt") ActivateMKTMode();
+                else if (code == L"cba") ActivateCBAMode();
+                else {
+                    SetWindowTextW(GetParent(hwnd), L"Cyber Search Pro");
+                    MessageBeep(MB_ICONERROR);
+                }
+                
+                isWaitingForCheat = false;
+                SendMessageW(hwnd, EM_SETPASSWORDCHAR, 0, 0); // Restore normal input
+                SetWindowTextW(hwnd, L"");
+                return 0;
+            }
+            
             SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(ID_BUTTON, BN_CLICKED), (LPARAM)hButton);
             return 0;
         }
         if (wParam == VK_F11) {
             isAlwaysOnTop = !isAlwaysOnTop;
             SetWindowPos(GetParent(hwnd), isAlwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-            MessageBoxW(hwnd, isAlwaysOnTop ? L"Always on Top: ENABLED" : L"Always on Top: DISABLED", L"Window Mode", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
     }
     return CallWindowProcW(OldEditProc, hwnd, uMsg, wParam, lParam);
 }
 
-void RunProcess(const std::wstring& commandLine) {
-    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
-    PROCESS_INFORMATION pi;
-    std::wstring cmd = commandLine;
-    if (CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+void RunProcess(const std::wstring& commandLine, bool asAdmin = false) {
+    if (asAdmin) {
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        sei.lpVerb = L"runas";
+        sei.lpFile = commandLine.c_str();
+        sei.nShow = SW_SHOWNORMAL;
+        ShellExecuteExW(&sei);
+    } else {
+        STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+        PROCESS_INFORMATION pi;
+        std::wstring cmd = commandLine;
+        if (CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        }
     }
 }
 
@@ -156,28 +248,65 @@ void ExportResultsToCsv(HWND hwnd) {
     }
 }
 
-void FastSearchThread(std::wstring directory, const std::vector<std::wstring>& searchPatterns, int myGen) {
+// MKT EXCLUSIVE: JSON Export
+void ExportResultsToJson(HWND hwnd) {
+    std::lock_guard<std::mutex> lock(resultsMutex);
+    if (searchResults.empty()) return;
+    FILE* f;
+    if (_wfopen_s(&f, L"CyberSearch_Dump.json", L"w, ccs=UTF-8") == 0) {
+        fwprintf(f, L"{\n  \"results\": [\n");
+        for (size_t i = 0; i < searchResults.size(); ++i) {
+            std::wstring p = searchResults[i].path;
+            size_t pos = 0;
+            while ((pos = p.find(L"\\", pos)) != std::wstring::npos) { p.replace(pos, 1, L"\\\\"); pos += 2; }
+            fwprintf(f, L"    {\"path\": \"%s\", \"size\": \"%s\"}%s\n", p.c_str(), searchResults[i].sizeStr.c_str(), (i == searchResults.size()-1) ? L"" : L",");
+        }
+        fwprintf(f, L"  ]\n}\n");
+        fclose(f);
+        MessageBoxW(hwnd, L"MKT Protocol: Data dumped to JSON.", L"Export Success", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+// MKT EXCLUSIVE: File Shredder
+void ShredFile(const std::wstring& path) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        char zeroData[1024] = {0};
+        DWORD bytesWritten;
+        for(int i=0; i<10; i++) WriteFile(hFile, zeroData, sizeof(zeroData), &bytesWritten, NULL);
+        CloseHandle(hFile);
+    }
+    DeleteFileW(path.c_str());
+}
+
+// Core Search Function
+void FastSearchThread(std::wstring directory, const std::vector<std::wstring>& searchPatterns, std::wstring rawPattern, int myGen) {
     std::wstring separator = (directory.back() == L'\\') ? L"" : L"\\";
     std::wstring searchPath = directory + separator + L"*";
     
     WIN32_FIND_DATAW findFileData;
     HANDLE hFind = FindFirstFileExW(searchPath.c_str(), FindExInfoBasic, &findFileData, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
 
+    bool isRegex = false;
+    std::wregex regexPattern;
+    if (isCBAMode && rawPattern.length() > 1 && rawPattern[0] == L'>') {
+        isRegex = true;
+        try { regexPattern = std::wregex(rawPattern.substr(1), std::regex_constants::icase); } catch(...) { isRegex = false; }
+    }
+
     if (hFind != INVALID_HANDLE_VALUE) {
         do {
-            if (currentSearchGen != myGen) {
-                FindClose(hFind);
-                return; 
-            }
+            if (currentSearchGen != myGen) { FindClose(hFind); return; }
 
             std::wstring fileName = findFileData.cFileName;
             if (fileName == L"." || fileName == L"..") continue;
 
             bool isMatch = false;
-            for (const auto& pat : searchPatterns) {
-                if (PathMatchSpecW(fileName.c_str(), pat.c_str())) {
-                    isMatch = true;
-                    break;
+            if (isRegex) {
+                if (std::regex_search(fileName, regexPattern)) isMatch = true;
+            } else {
+                for (const auto& pat : searchPatterns) {
+                    if (PathMatchSpecW(fileName.c_str(), pat.c_str())) { isMatch = true; break; }
                 }
             }
 
@@ -192,9 +321,7 @@ void FastSearchThread(std::wstring directory, const std::vector<std::wstring>& s
                 bool isDir = (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 
                 if (isDir) {
-                    sizeStr = L"";
-                    typeStr = L"Folder";
-                    rSize = 0; 
+                    sizeStr = L""; typeStr = L"Folder"; rSize = 0; 
                 } else {
                     ULARGE_INTEGER fileSize;
                     fileSize.HighPart = findFileData.nFileSizeHigh;
@@ -211,10 +338,12 @@ void FastSearchThread(std::wstring directory, const std::vector<std::wstring>& s
                     if (ext) typeStr = ext;
                 }
 
-                if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) typeStr += L" [Hidden]";
+                // MKT EXCLUSIVE: Highlight hidden files
+                if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) {
+                    typeStr += (isMKTMode ? L" [TOP SECRET]" : L" [Hidden]");
+                }
 
-                FILETIME ftLocal;
-                SYSTEMTIME st;
+                FILETIME ftLocal; SYSTEMTIME st;
                 FileTimeToLocalFileTime(&findFileData.ftLastWriteTime, &ftLocal);
                 FileTimeToSystemTime(&ftLocal, &st);
                 wchar_t dateBuf[64];
@@ -227,31 +356,47 @@ void FastSearchThread(std::wstring directory, const std::vector<std::wstring>& s
 
                 std::lock_guard<std::mutex> lock(resultsMutex);
                 searchResults.push_back({fullPath, sizeStr, dateStr, typeStr, iconIdx, rSize, findFileData.ftLastWriteTime});
+                
+                // MKT EXCLUSIVE: Copy first match to clipboard
+                if (isMKTMode && searchResults.size() == 1) CopyToClipboard(hMainWindow, fullPath);
             }
 
             if ((findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && 
                !(findFileData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-                FastSearchThread(directory + separator + fileName, searchPatterns, myGen);
+                FastSearchThread(directory + separator + fileName, searchPatterns, rawPattern, myGen);
             }
         } while (FindNextFileW(hFind, &findFileData) != 0);
         FindClose(hFind);
     }
 }
 
-void SearchWrapper(HWND hwnd, std::vector<std::wstring> searchPatterns, int myGen) {
+void SearchWrapper(HWND hwnd, std::vector<std::wstring> searchPatterns, std::wstring rawPattern, int myGen) {
     if (currentSearchGen != myGen) return; 
     
+    // CBA EXCLUSIVE: Prevent sleep mode and set max priority
+    if (isCBAMode) {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
+    
+    driveCapacities.clear(); 
     DWORD drives = GetLogicalDrives();
+    
     for (int i = 0; i < 26; i++) {
         if (currentSearchGen != myGen) break;
         if (drives & (1 << i)) {
             wchar_t root[4] = { (wchar_t)(L'A' + i), L':', L'\\', L'\0' };
             UINT type = GetDriveTypeW(root);
             if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE) {
-                FastSearchThread(root, searchPatterns, myGen);
+                ULARGE_INTEGER f, t, tf;
+                if (GetDiskFreeSpaceExW(root, &f, &t, &tf)) driveCapacities[(wchar_t)(L'A' + i)] = t.QuadPart;
+                FastSearchThread(root, searchPatterns, rawPattern, myGen);
             }
         }
     }
+    
+    // Remove sleep prevention
+    if (isCBAMode) SetThreadExecutionState(ES_CONTINUOUS); 
     
     if (currentSearchGen == myGen) {
         PostMessageW(hwnd, WM_SEARCH_FINISHED, myGen, 0);
@@ -264,20 +409,25 @@ void HandleContextMenu(HWND hwnd, int x, int y) {
     
     if (index != -1) {
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_OPEN, L"Open");
+        if (isCBAMode) InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_RUN_ADMIN, L"[CBA] Run as Administrator");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_EXPLORE, L"Open File Location");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_CMD, L"Open Command Prompt Here");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_PROPERTIES, L"Properties");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_COPY_PATH, L"Copy Path");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+        if (isMKTMode) InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_SHREDDER, L"[MKT] Shred File (Secure Erase)");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_DELETE, L"Delete");
         InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
     }
-    InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_EXPORT, L"Export Results to CSV");
+    
+    if (isMKTMode) InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_EXPORT_JSON, L"[MKT] Export to JSON");
+    else InsertMenuW(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_MENU_EXPORT, L"Export Results to CSV");
 
     int selection = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, x, y, 0, hwnd, NULL);
     DestroyMenu(hMenu);
 
     if (selection == ID_MENU_EXPORT) { ExportResultsToCsv(hwnd); return; }
+    if (selection == ID_MENU_EXPORT_JSON) { ExportResultsToJson(hwnd); return; }
     if (index == -1) return;
 
     std::wstring pathStr;
@@ -287,6 +437,7 @@ void HandleContextMenu(HWND hwnd, int x, int y) {
     }
     
     if (selection == ID_MENU_OPEN) RunProcess(L"\"" + pathStr + L"\"");
+    else if (selection == ID_MENU_RUN_ADMIN) RunProcess(pathStr, true);
     else if (selection == ID_MENU_EXPLORE) OpenFolderAndSelect(pathStr);
     else if (selection == ID_MENU_CMD) {
         std::wstring dir = pathStr.substr(0, pathStr.find_last_of(L"\\"));
@@ -294,6 +445,14 @@ void HandleContextMenu(HWND hwnd, int x, int y) {
     }
     else if (selection == ID_MENU_PROPERTIES) ShowFileProperties(hwnd, pathStr);
     else if (selection == ID_MENU_COPY_PATH) CopyToClipboard(hwnd, pathStr);
+    else if (selection == ID_MENU_SHREDDER) {
+        if (MessageBoxW(hwnd, L"File will be overwritten with zeros and destroyed forever. Proceed?", L"MKT Protocol", MB_ICONWARNING | MB_YESNO) == IDYES) {
+            ShredFile(pathStr);
+            std::lock_guard<std::mutex> lock(resultsMutex);
+            searchResults.erase(searchResults.begin() + index);
+            ListView_SetItemCountEx(hListView, searchResults.size(), LVSICF_NOINVALIDATEALL);
+        }
+    }
     else if (selection == ID_MENU_DELETE) {
         if (MessageBoxW(hwnd, L"Permanently delete?", L"Warning", MB_ICONWARNING | MB_YESNO) == IDYES) {
             if (DeleteFileW(pathStr.c_str())) {
@@ -336,9 +495,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             lvc.pszText = (LPWSTR)L"Date Modified"; lvc.cx = 140; ListView_InsertColumn(hListView, 2, &lvc);
             lvc.pszText = (LPWSTR)L"Type"; lvc.cx = 120; ListView_InsertColumn(hListView, 3, &lvc);
 
-            ListView_SetBkColor(hListView, bgColor);
-            ListView_SetTextBkColor(hListView, bgColor);
-
             memset(&nid, 0, sizeof(NOTIFYICONDATAW));
             nid.cbSize = sizeof(NOTIFYICONDATAW);
             nid.hWnd = hwnd;
@@ -359,10 +515,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
 
         case WM_SYSCOMMAND:
-            if ((wParam & 0xFFF0) == SC_MINIMIZE) {
-                ShowWindow(hwnd, SW_HIDE);
-                return 0;
-            }
+            if ((wParam & 0xFFF0) == SC_MINIMIZE) { ShowWindow(hwnd, SW_HIDE); return 0; }
             break;
 
         case WM_PAINT: {
@@ -372,17 +525,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             graphics.SetSmoothingMode(SmoothingModeAntiAlias);
             RECT rc; GetClientRect(hwnd, &rc);
             
-            SolidBrush bkgBrush(Color(255, 25, 25, 25));
+            SolidBrush bkgBrush(Color(255, GetRValue(bgColor), GetGValue(bgColor), GetBValue(bgColor)));
             graphics.FillRectangle(&bkgBrush, 0, 0, rc.right, rc.bottom);
 
-            LinearGradientBrush linGrBrush(Point(0, 0), Point(rc.right, 50), Color(255, 0, 150, 255), Color(255, 0, 255, 200));
+            LinearGradientBrush linGrBrush(Point(0, 0), Point(rc.right, 50), 
+                Color(255, GetRValue(gradientStart), GetGValue(gradientStart), GetBValue(gradientStart)), 
+                Color(255, GetRValue(gradientEnd), GetGValue(gradientEnd), GetBValue(gradientEnd)));
             graphics.FillRectangle(&linGrBrush, 0, 0, rc.right, 50);
 
             FontFamily fontFamily(L"Segoe UI");
             Font font(&fontFamily, 16, FontStyleBold, UnitPoint);
             SolidBrush textBrush(Color(255, 255, 255, 255));
             
-            graphics.DrawString(L"CYBER SEARCH PRO", -1, &font, PointF(10.0f, 12.0f), &textBrush);
+            wchar_t titleBuf[256];
+            GetWindowTextW(hwnd, titleBuf, 256);
+            graphics.DrawString(titleBuf, -1, &font, PointF(10.0f, 12.0f), &textBrush);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -391,15 +548,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             LPDRAWITEMSTRUCT pdis = (LPDRAWITEMSTRUCT)lParam;
             if (pdis->CtlID == ID_BUTTON) {
                 SetBkMode(pdis->hDC, TRANSPARENT);
-                HBRUSH btnBrush = CreateSolidBrush(pdis->itemState & ODS_SELECTED ? RGB(0, 150, 150) : RGB(40, 40, 40));
+                HBRUSH btnBrush = CreateSolidBrush(pdis->itemState & ODS_SELECTED ? gradientStart : RGB(40, 40, 40));
                 FillRect(pdis->hDC, &pdis->rcItem, btnBrush);
                 DeleteObject(btnBrush);
                 
-                HBRUSH borderBrush = CreateSolidBrush(RGB(0, 255, 255));
+                HBRUSH borderBrush = CreateSolidBrush(textColor);
                 FrameRect(pdis->hDC, &pdis->rcItem, borderBrush);
                 DeleteObject(borderBrush);
 
-                SetTextColor(pdis->hDC, RGB(0, 255, 255));
+                SetTextColor(pdis->hDC, textColor);
                 SelectObject(pdis->hDC, hUIFont);
                 DrawTextW(pdis->hDC, L"SEARCH", -1, &pdis->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
@@ -445,7 +602,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     spinnerFrame = 0;
                     searchStartTime = GetTickCount64();
                     
-                    std::thread(SearchWrapper, hwnd, patterns, newGen).detach();
+                    std::thread(SearchWrapper, hwnd, patterns, rawInput, newGen).detach();
                     SetTimer(hwnd, TIMER_UPDATE_UI, 100, NULL);
                 }
             }
@@ -462,7 +619,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 
                 wchar_t spinnerChar = spinnerChars[spinnerFrame % 4];
                 spinnerFrame++;
-                std::wstring statusMsg = L"[" + std::wstring(1, spinnerChar) + L"] Scanning all drives... Found: " + std::to_wstring(currentCount);
+                
+                std::wstring ramUsage = L"";
+                if (isCBAMode) {
+                    PROCESS_MEMORY_COUNTERS pmc;
+                    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+                        ramUsage = L" | RAM: " + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L" MB";
+                    }
+                }
+
+                std::wstring statusMsg = L"[" + std::wstring(1, spinnerChar) + L"] Scanning drives... Found: " + std::to_wstring(currentCount) + ramUsage;
+                if (isMKTMode && !isCBAMode) statusMsg += L" | MKT SYSTEM ACTIVE";
+                
                 SendMessageW(hStatus, SB_SETTEXT, 0, (LPARAM)statusMsg.c_str());
             }
             break;
@@ -470,28 +638,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_NOTIFY: {
             LPNMHDR nmhdr = (LPNMHDR)lParam;
             if (nmhdr->idFrom == ID_LISTVIEW) {
-                
-                // CRASH (ÇÖKME) ÇÖZÜMÜ BURADA BAŞLIYOR
                 if (nmhdr->code == LVN_COLUMNCLICK) {
                     LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
                     if (currentSortCol == pnmv->iSubItem) sortAscending = !sortAscending;
                     else { currentSortCol = pnmv->iSubItem; sortAscending = true; }
                     
-                    // BUG FIX 1: ListView odak çökmesini engellemek için seçimleri temizle
                     ListView_SetItemState(hListView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
                     
                     std::lock_guard<std::mutex> lock(resultsMutex);
-                    if (searchResults.empty()) break; // Liste boşsa işlemi kes
+                    if (searchResults.empty()) break; 
 
-                    // BUG FIX 2: Strict Weak Ordering hatasını engelleyen std::stable_sort ve StrCmpLogicalW mantığı
                     std::stable_sort(searchResults.begin(), searchResults.end(), [&](const SearchResult& a, const SearchResult& b) {
                         if (currentSortCol == 0) {
                             int cmp = StrCmpLogicalW(a.path.c_str(), b.path.c_str());
                             return sortAscending ? (cmp < 0) : (cmp > 0);
                         }
-                        if (currentSortCol == 1) {
-                            return sortAscending ? (a.rawSize < b.rawSize) : (a.rawSize > b.rawSize);
-                        }
+                        if (currentSortCol == 1) return sortAscending ? (a.rawSize < b.rawSize) : (a.rawSize > b.rawSize);
                         if (currentSortCol == 2) {
                             LONG cmp = CompareFileTime(&a.rawDate, &b.rawDate);
                             return sortAscending ? (cmp < 0) : (cmp > 0);
@@ -504,31 +666,48 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     });
                     
                     ListView_RedrawItems(hListView, 0, searchResults.size() - 1);
-                    
-                    // YENİ ÖZELLİK 2: Sıralama sonrası sütunları otomatik daralt/genişlet
-                    for(int i=0; i<4; i++) ListView_SetColumnWidth(hListView, i, LVSCW_AUTOSIZE);
                 }
                 else if (nmhdr->code == NM_CUSTOMDRAW) {
                     LPNMLVCUSTOMDRAW pLVCD = (LPNMLVCUSTOMDRAW)lParam;
                     if (pLVCD->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
                     else if (pLVCD->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                        if (pLVCD->nmcd.dwItemSpec % 2 == 0) pLVCD->clrTextBk = RGB(35, 35, 35);
-                        else pLVCD->clrTextBk = RGB(25, 25, 25);
+                        if (isMKTMode) {
+                            pLVCD->clrTextBk = (pLVCD->nmcd.dwItemSpec % 2 == 0) ? RGB(0, 30, 0) : RGB(0, 10, 0);
+                        } else {
+                            pLVCD->clrTextBk = (pLVCD->nmcd.dwItemSpec % 2 == 0) ? RGB(35, 35, 35) : RGB(25, 25, 25);
+                        }
                         
                         std::wstring type = L"";
                         {
                             std::lock_guard<std::mutex> lock(resultsMutex);
-                            if (pLVCD->nmcd.dwItemSpec < searchResults.size()) {
-                                type = searchResults[pLVCD->nmcd.dwItemSpec].typeStr;
-                            }
+                            if (pLVCD->nmcd.dwItemSpec < searchResults.size()) type = searchResults[pLVCD->nmcd.dwItemSpec].typeStr;
                         }
 
-                        // YENİ ÖZELLİK 1: Dosya Türü Renklendirmesi (Type Color Coding)
-                        if (type == L"Folder") pLVCD->clrText = RGB(0, 200, 255); // Mavi/Camgöbeği
-                        else if (type.find(L".exe") != std::wstring::npos || type.find(L".dll") != std::wstring::npos) pLVCD->clrText = RGB(255, 100, 100); // Kırmızı
-                        else if (type.find(L".txt") != std::wstring::npos || type.find(L".log") != std::wstring::npos || type.find(L".docx") != std::wstring::npos) pLVCD->clrText = RGB(100, 255, 100); // Yeşil
-                        else if (type.find(L".jpg") != std::wstring::npos || type.find(L".png") != std::wstring::npos || type.find(L".mp4") != std::wstring::npos) pLVCD->clrText = RGB(200, 100, 255); // Mor
-                        else pLVCD->clrText = textColor; // Varsayılan Camgöbeği
+                        if (type.find(L"Folder") != std::wstring::npos) pLVCD->clrText = isCBAMode ? RGB(255,200,100) : RGB(0, 200, 255); 
+                        else if (type.find(L".exe") != std::wstring::npos || type.find(L".dll") != std::wstring::npos) pLVCD->clrText = isMKTMode ? RGB(255, 0, 0) : RGB(255, 100, 100); 
+                        else if (type.find(L".txt") != std::wstring::npos || type.find(L".log") != std::wstring::npos) pLVCD->clrText = isMKTMode ? RGB(0, 255, 100) : RGB(100, 255, 100); 
+                        else pLVCD->clrText = textColor; 
+                        
+                        // Dynamic Ratio Calculation
+                        ULONGLONG size = 0;
+                        wchar_t driveLetter = L'C';
+                        {
+                            std::lock_guard<std::mutex> lock(resultsMutex);
+                            if (pLVCD->nmcd.dwItemSpec < searchResults.size()) {
+                                size = searchResults[pLVCD->nmcd.dwItemSpec].rawSize;
+                                if (!searchResults[pLVCD->nmcd.dwItemSpec].path.empty()) {
+                                    driveLetter = towupper(searchResults[pLVCD->nmcd.dwItemSpec].path[0]);
+                                }
+                            }
+                        }
+                        
+                        double ratio = 0.0;
+                        if (driveCapacities.count(driveLetter) > 0 && driveCapacities[driveLetter] > 0) {
+                            ratio = (double)size / driveCapacities[driveLetter] * 100.0;
+                        }
+
+                        if (ratio > 5.0) pLVCD->clrText = RGB(255, 80, 80); 
+                        else if (ratio > 1.0) pLVCD->clrText = RGB(255, 180, 0); 
                         
                         return CDRF_NEWFONT;
                     }
@@ -572,14 +751,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 KillTimer(hwnd, TIMER_UPDATE_UI);
                 ListView_SetItemCountEx(hListView, searchResults.size(), LVSICF_NOINVALIDATEALL);
                 
-                // YENİ ÖZELLİK 2 DEVAMI: Arama bittiğinde sütunları mükemmel boyuta getir
-                for(int i=0; i<4; i++) ListView_SetColumnWidth(hListView, i, LVSCW_AUTOSIZE);
+                // CBA EXCLUSIVE: Auto Column Alignment
+                if (isCBAMode) {
+                    for(int i=0; i<4; i++) ListView_SetColumnWidth(hListView, i, LVSCW_AUTOSIZE);
+                }
 
                 ULONGLONG elapsedStr = GetTickCount64() - searchStartTime;
                 double seconds = elapsedStr / 1000.0;
                 
                 wchar_t statusFinal[256];
                 swprintf(statusFinal, 256, L"Search completed in %.2f seconds. Total found: %zu", seconds, searchResults.size());
+                
+                if (isMKTMode && !isCBAMode) MessageBeep(MB_OK); 
+
                 SendMessageW(hStatus, SB_SETTEXT, 0, (LPARAM)statusFinal);
             }
             break;
@@ -607,7 +791,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"CyberSearchClass";
-    wc.hbrBackground = (HBRUSH)CreateSolidBrush(bgColor);
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wc);
 
